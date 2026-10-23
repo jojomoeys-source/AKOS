@@ -44,7 +44,8 @@ if(BUILD_TESTING)
             ${test_name}
             PROPERTIES
                 PASS_REGULAR_EXPRESSION
-                "Simulation finished. All people delivered."
+                    "Simulation finished. All people delivered."
+                TIMEOUT 15
         )
     endfunction()
 
@@ -54,15 +55,21 @@ if(BUILD_TESTING)
     add_elevator_test(same_floor same-floor.txt)
     add_elevator_test(different_initial_floors different-initial-floors.txt)
     add_elevator_test(many_passengers many-passengers.txt)
+    add_elevator_test(simultaneous_calls simultaneous-calls.txt)
+    add_elevator_test(dispatcher_retry dispatcher-retry.txt)
 
     add_test(
-        NAME work_period
+        NAME work-period
         COMMAND elevator
             --config ${CMAKE_CURRENT_SOURCE_DIR}/data/work-period.txt
             --log ${CMAKE_CURRENT_BINARY_DIR}/work_period.log
     )
     set_tests_properties(
-        work_period
-        PROPERTIES PASS_REGULAR_EXPRESSION "Configured work period finished."
+        work-period
+        PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "Configured work period finished."
+            TIMEOUT 15
     )
+
 endif()
