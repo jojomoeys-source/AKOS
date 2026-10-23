@@ -13,11 +13,10 @@ Lift *chooseLiftForPerson(
     DispatchStrategy strategy
 );
 
-void assignLiftsToWaitingPeople(
+int assignLiftToPerson(
     Lift *lifts,
     int liftCount,
-    Person *people,
-    int peopleCount,
+    Person *person,
     int currentTime,
     DispatchStrategy strategy,
     int doorOpeningTime

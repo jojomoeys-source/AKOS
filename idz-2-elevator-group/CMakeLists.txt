@@ -16,6 +16,7 @@ add_executable(elevator
     src/input.c
     src/interruption.c
     src/lift.c
+    src/lift_thread.c
     src/logger.c
     src/options.c
     src/person.c

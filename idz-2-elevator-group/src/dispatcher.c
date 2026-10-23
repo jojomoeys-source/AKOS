@@ -87,57 +87,61 @@ Lift *chooseLiftForPerson(
     return chosenLift;
 }
 
-// Назначение лифтов пассажирам, которые пока остались без лифта
-void assignLiftsToWaitingPeople(
+// Назначение лифта одному ожидающему пасажиру
+int assignLiftToPerson(
     Lift *lifts,
     int liftCount,
-    Person *people,
-    int peopleCount,
+    Person *person,
     int currentTime,
     DispatchStrategy strategy,
     int doorOpeningTime
 ) {
-    for (int i = 0; i < peopleCount; i++) {
-        Person *person = &people[i];
-
-        if (person->state != PERSON_WAITING || person->assignedLift != -1) {
-            continue;
-        }
-
-        Lift *lift = chooseLiftForPerson(
-            lifts, liftCount, person, strategy
-        );
-        if (lift == NULL) {
-            continue;
-        }
-
-        person->assignedLift = lift->id;
-        lift->reservedPlaces++;
-
-        logEvent("[Time %d] Person %d was assigned to lift %d.\n",
-                 currentTime, person->id, lift->id);
-
-        if (lift->state == LIFT_IDLE) {
-            lift->targetFloor = person->startFloor;
-
-            if (lift->targetFloor > lift->currentFloor) {
-                lift->direction = DIRECTION_UP;
-                lift->state = LIFT_MOVING;
-            } else if (lift->targetFloor < lift->currentFloor) {
-                lift->direction = DIRECTION_DOWN;
-                lift->state = LIFT_MOVING;
-            } else {
-                lift->direction = DIRECTION_IDLE;
-                lift->state = LIFT_DOORS_OPENING;
-                lift->actionTimeLeft = doorOpeningTime;
-                lift->stopCount++;
-
-                logEvent(
-                    "[Time %d] Lift %d started opening its doors "
-                    "at floor %d.\n",
-                    currentTime, lift->id, lift->currentFloor
-                );
-            }
-        }
+    Lift *lift = chooseLiftForPerson(
+        lifts,
+        liftCount,
+        person,
+        strategy
+    );
+    if (lift == NULL) {
+        return 0;
     }
+
+    person->assignedLift = lift->id;
+    lift->reservedPlaces++;
+
+    logEvent(
+        "[Time %d] Person %d was assigned to lift %d.\n",
+        currentTime,
+        person->id,
+        lift->id
+    );
+
+    if (lift->state != LIFT_IDLE) {
+        return 1;
+    }
+
+    lift->targetFloor = person->startFloor;
+
+    if (lift->targetFloor > lift->currentFloor) {
+        lift->direction = DIRECTION_UP;
+        lift->state = LIFT_MOVING;
+    } else if (lift->targetFloor < lift->currentFloor) {
+        lift->direction = DIRECTION_DOWN;
+        lift->state = LIFT_MOVING;
+    } else {
+        lift->direction = DIRECTION_IDLE;
+        lift->state = LIFT_DOORS_OPENING;
+        lift->actionTimeLeft = doorOpeningTime;
+        lift->stopCount++;
+
+        logEvent(
+            "[Time %d] Lift %d started opening its doors "
+            "at floor %d.\n",
+            currentTime,
+            lift->id,
+            lift->currentFloor
+        );
+    }
+
+    return 1;
 }

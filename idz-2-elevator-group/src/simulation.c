@@ -1,15 +1,14 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
-#include "actions.h"
 #include "context.h"
-#include "dispatcher.h"
 #include "dispatcher_thread.h"
 #include "interruption.h"
+#include "lift_thread.h"
 #include "logger.h"
 #include "person_thread.h"
-#include "service.h"
 #include "simulation.h"
 #include "statistics.h"
 
@@ -25,12 +24,14 @@ static int contextAllPeopleDelivered(SimulationContext *context) {
     return delivered;
 }
 
-// Остановка и ожидание всех созданных потоков
+// Остановка и ожидание всех созданых потоков
 static void stopWorkerThreads(
     SimulationContext *context,
     pthread_t dispatcherThread,
     pthread_t *personThreads,
-    int personThreadCount
+    int personThreadCount,
+    pthread_t *liftThreads,
+    int liftThreadCount
 ) {
     requestSimulationStop(context);
 
@@ -38,29 +39,21 @@ static void stopWorkerThreads(
         pthread_join(personThreads[i], NULL);
     }
 
+    for (int i = 0; i < liftThreadCount; i++) {
+        pthread_join(liftThreads[i], NULL);
+    }
+
     pthread_join(dispatcherThread, NULL);
 }
 
-// Движение лифтов с учётом заданной скорости
-static void moveLiftsForOneTick(
-    Lift *lifts,
-    int liftCount,
-    Person *people,
-    int peopleCount,
-    int currentTime,
-    const SimulationConfig *config
-) {
-    for (int step = 0; step < config->movementSpeed; step++) {
-        moveLifts(lifts, liftCount, currentTime);
-        checkStopsAtCurrentFloor(
-            lifts,
-            liftCount,
-            people,
-            peopleCount,
-            currentTime,
-            config->doorOpeningTime
-        );
-    }
+// Небольшая задержка между тактами
+static void waitBeforeNextTick(void) {
+    struct timespec delay = {
+        .tv_sec = 0,
+        .tv_nsec = 10 * 1000 * 1000
+    };
+
+    nanosleep(&delay, NULL);
 }
 
 // Главный цикл симуляции
@@ -154,7 +147,9 @@ void runSimulation(
             &context,
             dispatcherThread,
             personThreads,
-            createdPersonThreads
+            createdPersonThreads,
+            NULL,
+            0
         );
         free(personArguments);
         free(personThreads);
@@ -162,73 +157,128 @@ void runSimulation(
         return;
     }
 
-    int currentTime = 0;
-    while (!isInterruptRequested() &&
-           !contextAllPeopleDelivered(&context) &&
-           (config->workPeriod == 0 || currentTime < config->workPeriod)) {
-        pthread_mutex_lock(&context.modelMutex);
+    pthread_t *liftThreads = calloc(
+        (size_t)liftCount,
+        sizeof(pthread_t)
+    );
+    LiftThreadArguments *liftArguments = calloc(
+        (size_t)liftCount,
+        sizeof(LiftThreadArguments)
+    );
 
-        // Сначала заканчиваем действия из прошлых тактов
-        if (currentTime > 0) {
-            advanceTimedLiftActions(
-                lifts, liftCount, people, peopleCount, currentTime
+    if (liftThreads == NULL || liftArguments == NULL) {
+        logEvent(
+            "Error: could not allocate lift thread data.\n"
+        );
+
+        free(liftThreads);
+        free(liftArguments);
+
+        stopWorkerThreads(
+            &context,
+            dispatcherThread,
+            personThreads,
+            createdPersonThreads,
+            NULL,
+            0
+        );
+
+        free(personArguments);
+        free(personThreads);
+        destroySimulationContext(&context);
+        return;
+    }
+
+    int createdLiftThreads = 0;
+
+    for (int i = 0; i < liftCount; i++) {
+        liftArguments[i].context = &context;
+        liftArguments[i].liftIndex = i;
+
+        errorCode = pthread_create(
+            &liftThreads[i],
+            NULL,
+            liftThreadMain,
+            &liftArguments[i]
+        );
+        if (errorCode != 0) {
+            logEvent(
+                "Error: could not create thread for lift %d: %s\n",
+                lifts[i].id,
+                strerror(errorCode)
             );
-            moveLiftsForOneTick(
-                lifts,
-                liftCount,
-                people,
-                peopleCount,
-                currentTime,
-                config
-            );
+            break;
         }
 
-        // Теперь можно обрабатывать новые события
-        assignLiftsToWaitingPeople(
-            lifts,
-            liftCount,
-            people,
-            peopleCount,
-            currentTime,
-            config->strategy,
-            config->doorOpeningTime
-        );
-        serviceLiftsAtCurrentFloor(
-            lifts,
-            liftCount,
-            people,
-            peopleCount,
-            currentTime,
-            config
+        createdLiftThreads++;
+    }
+
+    if (createdLiftThreads != liftCount) {
+        stopWorkerThreads(
+            &context,
+            dispatcherThread,
+            personThreads,
+            createdPersonThreads,
+            liftThreads,
+            createdLiftThreads
         );
 
-        int delivered = allPeopleDelivered(people, peopleCount);
-        pthread_mutex_unlock(&context.modelMutex);
+        free(liftArguments);
+        free(liftThreads);
+        free(personArguments);
+        free(personThreads);
+        destroySimulationContext(&context);
+        return;
+    }
 
-        if (delivered) {
+    int currentTime = 0;
+
+    while (!isInterruptRequested() &&
+           !contextAllPeopleDelivered(&context) &&
+           (config->workPeriod == 0 ||
+            currentTime < config->workPeriod)) {
+
+        //Начинаем новый такт и ждём, пока каждый лифт закончит его обработку.
+        setSimulationTime(&context, currentTime);
+
+        if (!waitForAllLifts(&context)) {
+            break;
+        }
+
+        if (contextAllPeopleDelivered(&context)) {
             stopWorkerThreads(
                 &context,
                 dispatcherThread,
                 personThreads,
-                createdPersonThreads
+                createdPersonThreads,
+                liftThreads,
+                createdLiftThreads
             );
 
             logEvent(
-                "[Time %d] Simulation finished. All people delivered.\n",
+                "[Time %d] Simulation finished. "
+                "All people delivered.\n",
                 currentTime
             );
+
             printSimulationSummary(
-                people, peopleCount, lifts, liftCount, currentTime
+                people,
+                peopleCount,
+                lifts,
+                liftCount,
+                currentTime
             );
 
+            free(liftArguments);
+            free(liftThreads);
             free(personArguments);
             free(personThreads);
             destroySimulationContext(&context);
             return;
         }
 
+        waitBeforeNextTick();
         currentTime++;
-        setSimulationTime(&context, currentTime);
     }
 
     if (isInterruptRequested()) {
@@ -244,14 +294,20 @@ void runSimulation(
         &context,
         dispatcherThread,
         personThreads,
-        createdPersonThreads
+        createdPersonThreads,
+        liftThreads,
+        createdLiftThreads
     );
 
     printSimulationSummary(
         people, peopleCount, lifts, liftCount, currentTime
     );
 
+    free(liftArguments);
+    free(liftThreads);
+
     free(personArguments);
     free(personThreads);
+
     destroySimulationContext(&context);
 }

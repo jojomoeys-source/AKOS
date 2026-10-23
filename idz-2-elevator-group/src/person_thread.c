@@ -65,6 +65,23 @@ void *personThreadMain(void *argument) {
             currentTime,
             personId
         );
+        return NULL;
+    }
+
+    //После регистрации вызова пасажир остается активным участником до доставки или остановки
+    int nextCheckTime = currentTime + 1;
+
+    while (waitForSimulationTime(context, nextCheckTime)) {
+        pthread_mutex_lock(&context->modelMutex);
+
+        int delivered = person->state == PERSON_DELIVERED;
+        nextCheckTime = context->currentTime + 1;
+
+        pthread_mutex_unlock(&context->modelMutex);
+
+        if (delivered) {
+            break;
+        }
     }
 
     return NULL;

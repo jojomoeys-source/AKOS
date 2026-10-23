@@ -19,7 +19,8 @@ int initializeSimulationContext(
     context->liftCount = liftCount;
     context->config = config;
     context->stopRequested = 0;
-    context->currentTime = 0;
+    context->currentTime = -1;
+    context->completedLiftCount = 0;
 
     int errorCode = pthread_mutex_init(&context->modelMutex, NULL);
     if (errorCode != 0) {
@@ -42,7 +43,23 @@ int initializeSimulationContext(
         return 0;
     }
 
+    errorCode = pthread_cond_init(
+        &context->liftTickCondition,
+        NULL
+    );
+    if (errorCode != 0) {
+        fprintf(
+            stderr,
+            "Error initializing lift tick condition: %s\n",
+            strerror(errorCode)
+        );
+        pthread_cond_destroy(&context->clockCondition);
+        pthread_mutex_destroy(&context->modelMutex);
+        return 0;
+    }
+
     if (!initializeCallQueue(&context->callQueue, peopleCount)) {
+        pthread_cond_destroy(&context->liftTickCondition);
         pthread_cond_destroy(&context->clockCondition);
         pthread_mutex_destroy(&context->modelMutex);
         return 0;
@@ -55,7 +72,18 @@ int initializeSimulationContext(
 void destroySimulationContext(SimulationContext *context) {
     destroyCallQueue(&context->callQueue);
 
-    int errorCode = pthread_cond_destroy(&context->clockCondition);
+    int errorCode = pthread_cond_destroy(
+        &context->liftTickCondition
+    );
+    if (errorCode != 0) {
+        fprintf(
+            stderr,
+            "Error destroying lift tick condition: %s\n",
+            strerror(errorCode)
+        );
+    }
+
+    errorCode = pthread_cond_destroy(&context->clockCondition);
     if (errorCode != 0) {
         fprintf(
             stderr,
@@ -80,6 +108,7 @@ void requestSimulationStop(SimulationContext *context) {
 
     context->stopRequested = 1;
     pthread_cond_broadcast(&context->clockCondition);
+    pthread_cond_broadcast(&context->liftTickCondition);
 
     pthread_mutex_unlock(&context->modelMutex);
 
@@ -105,6 +134,7 @@ void setSimulationTime(
     pthread_mutex_lock(&context->modelMutex);
 
     context->currentTime = currentTime;
+    context->completedLiftCount = 0;
     pthread_cond_broadcast(&context->clockCondition);
 
     pthread_mutex_unlock(&context->modelMutex);
@@ -121,6 +151,34 @@ int waitForSimulationTime(
            !context->stopRequested) {
         pthread_cond_wait(
             &context->clockCondition,
+            &context->modelMutex
+        );
+    }
+
+    int shouldContinue = !context->stopRequested;
+
+    pthread_mutex_unlock(&context->modelMutex);
+    return shouldContinue;
+}
+
+// Сообщение о завершени такта одним лифтом
+void completeLiftTick(SimulationContext *context) {
+    pthread_mutex_lock(&context->modelMutex);
+
+    context->completedLiftCount++;
+    pthread_cond_signal(&context->liftTickCondition);
+
+    pthread_mutex_unlock(&context->modelMutex);
+}
+
+// Ожидание завершения такта всеми лифтами
+int waitForAllLifts(SimulationContext *context) {
+    pthread_mutex_lock(&context->modelMutex);
+
+    while (context->completedLiftCount < context->liftCount &&
+           !context->stopRequested) {
+        pthread_cond_wait(
+            &context->liftTickCondition,
             &context->modelMutex
         );
     }
