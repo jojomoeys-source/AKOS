@@ -305,6 +305,11 @@ int startTcpEventServer(const char *bindAddress, const char *port) {
         return -1;
     }
 
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        perror("signal SIGPIPE");
+        return -1;
+    }
+
     // Запуск TCP-сервера до старта модели
     int readyPipe[2];
     if (pipe(readyPipe) == -1) {
