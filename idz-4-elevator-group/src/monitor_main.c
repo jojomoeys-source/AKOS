@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <netdb.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -42,6 +43,11 @@ static int connectToServer(const char *host, const char *port) {
 
 int main(int argumentCount, char **argumentValues) {
     // Клиент печатает полученные события
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        perror("signal SIGPIPE");
+        return 1;
+    }
+
     const char *host = "127.0.0.1";
     const char *port = "5050";
 
